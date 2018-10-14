@@ -1,0 +1,217 @@
+import groovy.xml.MarkupBuilder
+
+plugins {
+    id 'java'
+    id 'eclipse'
+}
+
+repositories {
+    jcenter()
+}
+
+def javaVersion = "11"
+def defaultEncoding = "UTF-8"
+
+sourceCompatibility = javaVersion
+targetCompatibility = javaVersion
+
+dependencies {
+	// https://mvnrepository.com/artifact/io.netty/netty-all
+	compile group: 'io.netty', name: 'netty-all', version: '4.1.30.Final'
+
+    // https://mvnrepository.com/artifact/org.littleshoot/dnssec4j
+    compile group: 'org.littleshoot', name: 'dnssec4j', version: '0.1.6'
+
+	// https://mvnrepository.com/artifact/org.apache.commons/commons-lang3
+	compile group: 'org.apache.commons', name: 'commons-lang3', version: '3.8.1'
+
+    // https://mvnrepository.com/artifact/com.google.guava/guava
+    // TODO 除外したい
+    compile group: 'com.google.guava', name: 'guava', version: '26.0-jre'
+
+    // https://mvnrepository.com/artifact/com.google.code.gson/gson
+    compile group: 'com.google.code.gson', name: 'gson', version: '2.8.5'
+
+	// https://mvnrepository.com/artifact/org.slf4j/slf4j-api
+	compile group: 'org.slf4j', name: 'slf4j-api', version: '1.7.25'
+
+	// https://mvnrepository.com/artifact/org.slf4j/jcl-over-slf4j
+	compile group: 'org.slf4j', name: 'jcl-over-slf4j', version: '1.7.25'
+
+	// https://mvnrepository.com/artifact/org.projectlombok/lombok
+	compileOnly group: 'org.projectlombok', name: 'lombok', version: '1.18.2'
+
+	// https://mvnrepository.com/artifact/junit/junit
+	testCompile group: 'junit', name: 'junit', version: '4.12'
+}
+
+// 設定ファイルに、指定したソースを書き込む
+def prefs = { target, sources ->
+    file(target).withPrintWriter("UTF-8") { writer ->
+        writer.println "eclipse.preferences.version=1"
+ 
+        sources.each { source ->
+            if (source instanceof File || source instanceof String) {
+                def s
+                if (source instanceof String) {
+                    s = file(source)
+                } else {
+                    s = source
+                }
+ 
+                s.eachLine("UTF-8") { line ->
+                    writer.println line
+                }
+            } else if (source instanceof Map) {
+                source.each { key, value ->
+                    writer.println "${key}=${value.replaceAll('(\r\n|\r|\n)', '\\\\n').replace('=', '\\=')}"
+                }
+            }
+        }
+    }
+}
+
+// eclipse config
+eclipse {
+    project {
+        // checkstyleプラグインを有効にする
+        natures "net.sf.eclipsecs.core.CheckstyleNature"
+        buildCommand "net.sf.eclipsecs.core.CheckstyleBuilder"
+ 
+        file {
+            withXml {
+                // gladle関連リソースを表示しないようにする
+                def resources = it.asNode().appendNode("filteredResources")
+                def random = new Random()
+                def create = { parent, type, arguments ->
+                    def filter = parent.appendNode("filter")
+                    filter.appendNode("id", System.currentTimeMillis() + random.nextInt())
+                    filter.appendNode("type", type)
+                    filter.appendNode("name", "")
+ 
+                    def matcher = filter.appendNode("matcher")
+                    matcher.appendNode("id", "org.eclipse.ui.ide.multiFilter")
+                    matcher.appendNode("arguments", arguments)
+                }
+ 
+                create resources, 10, "1.0-name-matches-false-false-gradle"
+                create resources,  6, "1.0-name-matches-false-false-gradlew*"
+            }
+        }
+    }
+ 
+    jdt.file.withProperties { p ->
+        // Annotation Processingを有効にする
+        p.put "org.eclipse.jdt.core.compiler.processAnnotations", "enabled"
+ 
+        // フォーマッタを適用する
+        new XmlSlurper().parse("./src/config/formatter_google_mod.xml").profile.setting.each {
+            p.put(it.@id as String, it.@value as String)
+        }
+    }
+ 
+    classpath {
+        // eclipseが作るbinディレクトリは邪魔なので、移動する
+        defaultOutputDir = file("${project.buildDir}/eclipse/classes")
+ 
+        // ビルド結果は個別に出力しない
+        file {
+            whenMerged { classpath ->
+                classpath
+                    .entries
+                    .findAll { it.kind == "src" }
+                    .each { it.output = null }
+            }
+        }
+    }
+}
+ 
+eclipseProject {
+    doLast {
+        // デフォルトの文字コードを設定する
+        prefs ".settings/org.eclipse.core.resources.prefs", [
+            "src/config/eclipse/Resource/text_file_encoding.properties",
+        ]
+ 
+        // デフォルトの改行文字を設定する
+        prefs ".settings/org.eclipse.core.runtime.prefs", [
+            "src/config/eclipse/Resource/new_text_file_line_delimiter.properties",
+        ]
+ 
+        // チェックスタイルを有効にする
+        file(".checkstyle").withWriter("UTF-8") {
+            def name = "Google Java Style 改"
+            def conf = new MarkupBuilder(it)
+            conf."fileset-config"("file-format-version": "1.2.0", "simple-config": "true", "sync-formatter": "false") {
+                "local-check-config"(
+                        name: "${name}",
+                        location: "${project.rootDir}/src/config/checkstyle_google_mod.xml",
+                        type: "external") {
+                    "additional-data"(name: "protect-config-file", value: "true")
+                }
+                fileset(name: "all", enabled: "true", "check-config-name": "${name}", local: "true") {
+                    "file-match-pattern"("match-pattern": ".", "include-pattern": "true")
+                }
+                filter(name: "DerivedFiles", enabled: true)
+            }
+        }
+    }
+}
+ 
+cleanEclipseProject {
+    doLast {
+        delete ".settings/org.eclipse.core.resources.prefs"
+        delete ".settings/org.eclipse.core.runtime.prefs"
+        delete ".checkstyle"
+    }
+}
+ 
+eclipseJdt {
+    doLast {
+        // Annotation Processingを有効にする
+        prefs ".settings/org.eclipse.jdt.apt.core.prefs", [
+            "src/config/eclipse/JavaCompiler/annotation_processing.properties",
+        ]
+ 
+        // domaとlombokのAnnotation Processing Pluginを有効にする
+        file(".factorypath").withWriter() {
+            // jarを検索する
+            def find = { configuration, name ->
+                configurations[configuration].find {
+                    it.name.startsWith(name) && !it.name.contains("spring")
+                }
+            }
+ 
+            new MarkupBuilder(it).factorypath() {
+                factorypathentry(kind: "EXTJAR", id: find("compileOnly", "lombok"), enabled: true, runInBatchMode: false)
+                // factorypathentry(kind: "EXTJAR", id: find("compile",     "doma"),   enabled: true, runInBatchMode: false)
+            }
+        }
+ 
+        // code style
+        def codetemplate = file("src/config/eclipse/JavaCodeStyle/codetemplates.xml").text
+        if (project.hasProperty("java.user.name")) {
+            codetemplate = codetemplate.replace('${user}', getProperty("java.user.name"))
+        }
+ 
+        prefs ".settings/org.eclipse.jdt.ui.prefs", [
+            "src/config/eclipse/JavaCodeStyle/organize_imports.properties",
+            "src/config/eclipse/JavaEditor/save_actions.properties",
+            [ "org.eclipse.jdt.ui.text.custom_code_templates": codetemplate ],
+        ]
+    }
+}
+ 
+cleanEclipseJdt {
+    doLast {
+        delete ".settings/org.eclipse.jdt.apt.core.prefs"
+        delete ".settings/org.eclipse.jdt.ui.prefs"
+        delete ".factorypath"
+    }
+}
+ 
+tasks.eclipse.dependsOn cleanEclipse
+
+task wrapper(type: Wrapper) {
+    gradleVersion = "4.10.2"
+}
